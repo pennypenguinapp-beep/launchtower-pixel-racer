@@ -33,7 +33,7 @@
   }
   canvas{
     background:#0a0e14; border:1px solid var(--line); border-radius:8px;
-    display:block; width:100%; height:auto; max-height:calc(100vh - 150px);
+    display:block; width:auto; height:auto;
     image-rendering:pixelated;
   }
   .overlay{
@@ -42,12 +42,12 @@
     background:rgba(13,17,23,.82); backdrop-filter:blur(2px);
     border-radius:8px; padding:20px; z-index:5;
   }
-  .overlay h1{font-size:26px; letter-spacing:3px; margin-bottom:8px;}
+  .overlay h1{font-size:34px; letter-spacing:3px; margin-bottom:8px;}
   .overlay h1 span{color:var(--accent);}
   .overlay p{color:var(--dim); font-size:13px; line-height:1.7; max-width:340px;}
   .overlay .big{font-size:20px; color:var(--accent2); margin:10px 0;}
   .btn{
-    margin-top:18px; padding:12px 30px; font-family:inherit; font-size:15px;
+    margin-top:18px; padding:14px 40px; font-family:inherit; font-size:17px;
     letter-spacing:2px; background:var(--accent); color:#04120a; border:none;
     border-radius:6px; cursor:pointer; font-weight:700;
   }
@@ -80,14 +80,22 @@
 
   <div class="overlay" id="startScreen">
     <h1>PIXEL <span>RACER</span></h1>
-    <p>Dodge the traffic. Grab the fuel cans. The road gets faster the longer you survive — and the sun goes down.</p>
+    <p>Steer to dodge traffic and grab fuel cans. The road gets faster the longer you survive.</p>
     <div class="big" id="startBest"></div>
     <button class="btn" id="startBtn">START ENGINE</button>
     <div class="keys">
       <kbd>&larr;</kbd> <kbd>&rarr;</kbd> or <kbd>A</kbd> <kbd>D</kbd> to steer &nbsp;·&nbsp;
       <kbd>W</kbd>/<kbd>&uarr;</kbd> boost &nbsp;·&nbsp;
+      <kbd>P</kbd>/<kbd>Esc</kbd> pause &nbsp;·&nbsp;
       touch: hold left / right half of screen
     </div>
+  </div>
+
+  <div class="overlay hidden" id="pauseScreen">
+    <h1>PAUSED</h1>
+    <p>Engine idling. The road waits for you.</p>
+    <button class="btn" id="resumeBtn">RESUME</button>
+    <div class="keys"><kbd>P</kbd> / <kbd>Esc</kbd> or tap to resume</div>
   </div>
 
   <div class="overlay hidden" id="overScreen">
@@ -118,7 +126,7 @@ const CAR_W = 44, CAR_H = 72;
 const PLAYER_Y = H - 130;
 
 // ---- state ----
-let state = 'menu'; // menu | play | over
+let state = 'menu'; // menu | play | over | paused
 let score = 0, best = 0, fuel = 100;
 let speed = 4.2;
 let t = 0; // world time for day/night
@@ -135,6 +143,22 @@ try { best = parseInt(localStorage.getItem('pr_best')||'0',10)||0; } catch(e){}
 document.getElementById('best').textContent = best;
 document.getElementById('startBest').textContent = best > 0 ? ('BEST: ' + best) : 'FIRST RUN';
 
+// ---- WebAudio (no files) ----
+let AC = null;
+function audio(){ if(!AC){ try{ AC = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } return AC; }
+function beep(freq, dur, type, vol, when){
+  const ac = audio(); if(!ac) return;
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type||'square'; o.frequency.value = freq;
+  g.gain.setValueAtTime(vol||0.06, ac.currentTime + (when||0));
+  g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + (when||0) + dur);
+  o.connect(g); g.connect(ac.destination);
+  o.start(ac.currentTime + (when||0)); o.stop(ac.currentTime + (when||0) + dur + 0.02);
+}
+function sfxFuel(){ beep(660,0.08,'square',0.05); beep(990,0.1,'square',0.05,0.07); }
+function sfxCrash(){ beep(110,0.25,'sawtooth',0.09); beep(70,0.35,'square',0.08,0.05); }
+function sfxStart(){ beep(440,0.08,'square',0.05); beep(660,0.1,'square',0.05,0.08); }
+
 // ---- input ----
 const keys = {};
 addEventListener('keydown', e=>{
@@ -142,8 +166,18 @@ addEventListener('keydown', e=>{
   if(['arrowleft','arrowright','arrowup','arrowdown',' '].includes(e.key.toLowerCase())) e.preventDefault();
   if(state==='menu' && (e.key==='Enter'||e.key===' ')) start();
   else if(state==='over' && (e.key==='Enter'||e.key===' ')) start();
+  else if((state==='play'||state==='paused') && (e.key==='p'||e.key==='P'||e.key==='Escape')){
+    if(state==='play') pauseGame(); else resumeGame();
+  }
 });
 addEventListener('keyup', e=>{ keys[e.key.toLowerCase()] = false; });
+
+// pause when tab hidden
+document.addEventListener('visibilitychange', ()=>{
+  if(document.hidden && state==='play') pauseGame();
+});
+function pauseGame(){ if(state!=='play') return; state='paused'; document.getElementById('pauseScreen').classList.remove('hidden'); }
+function resumeGame(){ if(state!=='paused') return; state='play'; last = performance.now(); document.getElementById('pauseScreen').classList.add('hidden'); }
 
 let touchSide = 0; // -1 left, 1 right, 0 none
 function touchPos(e){
@@ -155,6 +189,7 @@ cv.addEventListener('touchstart', e=>{
   e.preventDefault();
   if(state==='menu'){ start(); return; }
   if(state==='over'){ start(); return; }
+  if(state==='paused'){ resumeGame(); return; }
   touchSide = touchPos(e);
 }, {passive:false});
 cv.addEventListener('touchmove', e=>{ e.preventDefault(); touchSide = touchPos(e); }, {passive:false});
@@ -162,12 +197,14 @@ cv.addEventListener('touchend', e=>{ e.preventDefault(); touchSide = 0; }, {pass
 cv.addEventListener('mousedown', e=>{
   if(state==='menu'){ start(); return; }
   if(state==='over'){ start(); return; }
+  if(state==='paused'){ resumeGame(); return; }
   touchSide = touchPos(e);
 });
 addEventListener('mouseup', ()=>{ touchSide = 0; });
 
 document.getElementById('startBtn').addEventListener('click', start);
 document.getElementById('retryBtn').addEventListener('click', start);
+document.getElementById('resumeBtn').addEventListener('click', resumeGame);
 
 // ---- helpers ----
 function laneCenter(i){ return ROAD_L + LANE_W*(i+0.5); }
@@ -206,8 +243,11 @@ function start(){
   cars=[]; fuels=[]; particles=[];
   player.x = W/2; player.vx=0;
   spawnCarIn=40; spawnFuelIn=220; shake=0; newBest=false;
+  last = performance.now();
+  sfxStart();
   document.getElementById('startScreen').classList.add('hidden');
   document.getElementById('overScreen').classList.add('hidden');
+  document.getElementById('pauseScreen').classList.add('hidden');
 }
 
 function gameOver(){
@@ -281,6 +321,7 @@ function update(dt){
       burst(player.x, PLAYER_Y, '#ff7043', 26);
       burst(c.x, c.y, c.body, 18);
       shake = 14;
+      sfxCrash();
       gameOver();
       return;
     }
@@ -297,6 +338,7 @@ function update(dt){
       fuel = Math.min(100, fuel + 30);
       score += 25;
       burst(f.x, f.y, '#ffd54f', 14);
+      sfxFuel();
     }
   }
 
@@ -427,7 +469,7 @@ function draw(){
   for(const car of cars) drawCar(car.x, car.y, car.w, car.h, car.body, car.dark, false);
 
   // player
-  if(state!=='menu') drawCar(player.x, PLAYER_Y, CAR_W, CAR_H, '#3fb950', '#1e6b34', true);
+  if(state!=='menu' && state!=='paused') drawCar(player.x, PLAYER_Y, CAR_W, CAR_H, '#3fb950', '#1e6b34', true);
 
   // particles
   for(const p of particles){
@@ -469,6 +511,19 @@ function draw(){
 
   ctx.restore();
 }
+
+// ---- fit canvas to window (letterboxed) ----
+function fitCanvas(){
+  const hdr = document.querySelector('header').getBoundingClientRect().height;
+  const ftr = document.querySelector('footer').getBoundingClientRect().height;
+  const maxW = Math.min(window.innerWidth - 16, 520);
+  const maxH = window.innerHeight - hdr - ftr - 32;
+  const scale = Math.min(maxW / W, maxH / H);
+  cv.style.width = Math.floor(W * scale) + 'px';
+  cv.style.height = Math.floor(H * scale) + 'px';
+}
+addEventListener('resize', fitCanvas);
+fitCanvas();
 
 // ---- loop ----
 let last = performance.now();
